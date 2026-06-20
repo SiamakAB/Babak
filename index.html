@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AR Experience</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image.prod.js"></script>
+  <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+  <script>
+    // Safely register the video-updater component once AFRAME is confirmed available.
+    // Guards against slow mobile connections where script execution order can race.
+    function registerVideoUpdater() {
+      if (typeof AFRAME === 'undefined') {
+        setTimeout(registerVideoUpdater, 50);
+        return;
+      }
+      AFRAME.registerComponent('video-updater', {
+        init: function () {
+          this.video = document.getElementById('arvid');
+        },
+        tick: function () {
+          if (!this.video || this.video.paused || this.video.readyState < 2) return;
+          const mesh = this.el.getObject3D('mesh');
+          if (mesh && mesh.material && mesh.material.map) {
+            mesh.material.map.needsUpdate = true;
+          }
+        }
+      });
+    }
+    registerVideoUpdater();
+  </script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #08080e;
+      font-family: system-ui, -apple-system, sans-serif;
+      color: #e0e0f0;
+      height: 100dvh;
+      overflow: hidden;
+    }
+
+    /* ─── Loading screen ─── */
+    #loading {
+      position: fixed; inset: 0; z-index: 900;
+      background: #08080e;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 0;
+      padding: 32px;
+      text-align: center;
+      transition: opacity 0.6s ease;
+    }
+    #loading.fade { opacity: 0; pointer-events: none; }
+
+    .spinner {
+      width: 44px; height: 44px;
+      border: 2.5px solid #1e1e32;
+      border-top-color: #00e5ff;
+      border-radius: 50%;
+      animation: spin 0.85s linear infinite;
+      margin-bottom: 20px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #load-title {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      color: #9090b0;
+      margin-bottom: 6px;
+    }
+
+    #load-sub {
+      font-size: 12px;
+      color: #44445a;
+      line-height: 1.6;
+    }
+
+    /* QR section inside loading screen */
+    #qr-wrap {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      margin-top: 28px;
+      padding-top: 28px;
+      border-top: 1px solid #1e1e32;
+      width: 100%;
+      max-width: 280px;
+    }
+    #qr-wrap.show { display: flex; }
+
+    #qr-wrap p {
+      font-size: 12px;
+      color: #55556a;
+      line-height: 1.6;
+    }
+
+    #qr-canvas {
+      border-radius: 10px;
+      background: #fff;
+      padding: 10px;
+    }
+
+    .qr-link {
+      font-size: 11px;
+      color: #00b8cc;
+      word-break: break-all;
+      text-align: center;
+    }
+
+    .copy-btn {
+      background: transparent;
+      border: 1px solid #2a2a44;
+      border-radius: 6px;
+      color: #7070a0;
+      font-size: 11px;
+      padding: 6px 14px;
+      cursor: pointer;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    .copy-btn:hover { border-color: #00e5ff; color: #00e5ff; }
+
+    #start-btn {
+      margin-top: 4px;
+      padding: 12px 32px;
+      background: linear-gradient(135deg, #00e5ff, #ff3cac);
+      border: none; border-radius: 8px;
+      font-size: 13px; font-weight: 700;
+      letter-spacing: 0.06em;
+      color: #000;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    #start-btn:hover { opacity: 0.85; }
+
+    /* ─── Error screen ─── */
+    #error-screen {
+      display: none; position: fixed; inset: 0; z-index: 950;
+      background: #08080e;
+      flex-direction: column; align-items: center; justify-content: center;
+      padding: 32px; text-align: center; gap: 12px;
+    }
+    #error-screen.show { display: flex; }
+    #error-title { font-size: 18px; font-weight: 700; color: #ff6060; }
+    #error-msg   { font-size: 13px; color: #664; line-height: 1.7; max-width: 300px; }
+    #error-msg code { color: #ffaa55; }
+
+    /* ─── AR scene ─── */
+    a-scene { position: fixed; inset: 0; width: 100vw; height: 100dvh; }
+
+    /* ─── Status pill ─── */
+    #status {
+      position: fixed; bottom: 32px; left: 50%; transform: translateX(-50%);
+      z-index: 300;
+      background: rgba(0,0,0,0.7);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 22px;
+      padding: 10px 22px;
+      font-size: 14px; color: #aaa;
+      backdrop-filter: blur(10px);
+      display: none; white-space: nowrap;
+      pointer-events: none;
+    }
+    #status.show { display: block; }
+
+    /* ─── Tap to unmute ─── */
+    #unmute {
+      position: fixed; top: 24px; left: 50%; transform: translateX(-50%);
+      z-index: 300;
+      background: rgba(0,0,0,0.75);
+      border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 22px;
+      padding: 10px 22px;
+      font-size: 14px; color: #fff;
+      cursor: pointer;
+      backdrop-filter: blur(10px);
+      display: none;
+      animation: pulse 1.8s ease-in-out infinite;
+    }
+    #unmute.show { display: block; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+  </style>
+</head>
+<body>
+
+<!-- ─── LOADING ─── -->
+<div id="loading">
+  <div class="spinner" id="spinner"></div>
+  <div id="load-title">Preparing AR…</div>
+  <div id="load-sub"></div>
+
+  <!-- QR code shown once ready (desktop only flow) -->
+  <div id="qr-wrap">
+    <p>Share this QR code — she scans it with her phone<br/>and points at your image to see the video.</p>
+    <canvas id="qr-canvas"></canvas>
+    <div class="qr-link" id="qr-link-text"></div>
+    <button class="copy-btn" id="copy-btn">Copy link</button>
+  </div>
+</div>
+
+<!-- ─── ERROR ─── -->
+<div id="error-screen">
+  <div style="font-size:36px">⚠️</div>
+  <div id="error-title">Something went wrong</div>
+  <div id="error-msg"></div>
+</div>
+
+<!-- ─── STATUS / UNMUTE (shown during AR) ─── -->
+<div id="status">🔍 Point camera at your image</div>
+<button id="unmute">🔇 Tap to hear audio</button>
+
+<script>
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  CONFIG — must match filenames in your GitHub repo
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const IMAGE_FILE = 'target.jpg';
+const VIDEO_FILE = 'video.mp4';
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// Hardcoded GitHub Pages URL — QR always works regardless of how the page is opened
+const GITHUB_URL = 'https://siamakab.github.io/Babak/';
+
+const base    = location.protocol === 'file:'
+  ? GITHUB_URL
+  : location.href.split('?')[0].replace(/\/[^\/]*$/, '/');
+const imgURL  = base + IMAGE_FILE;
+const vidURL  = base + VIDEO_FILE;
+const pageURL = GITHUB_URL;
+
+const loadingEl  = document.getElementById('loading');
+const spinnerEl  = document.getElementById('spinner');
+const titleEl    = document.getElementById('load-title');
+const subEl      = document.getElementById('load-sub');
+const qrWrap     = document.getElementById('qr-wrap');
+const statusEl   = document.getElementById('status');
+const unmuteEl   = document.getElementById('unmute');
+const errorScr   = document.getElementById('error-screen');
+
+function msg(t, s) { titleEl.textContent = t; subEl.innerHTML = s || ''; }
+
+function showError(title, html) {
+  loadingEl.style.display = 'none';
+  document.getElementById('error-title').textContent = title;
+  document.getElementById('error-msg').innerHTML = html;
+  errorScr.classList.add('show');
+}
+
+// Detect mobile (she will land directly in AR; desktop shows QR first)
+const isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+
+async function init() {
+  // Desktop → show QR immediately, no file fetching needed
+  if (!isMobile) {
+    spinnerEl.style.display = 'none';
+    msg('Your AR experience is ready!', 'Scan the QR code with your smartphone to launch.');
+    QRCode.toCanvas(document.getElementById('qr-canvas'), pageURL, {
+      width: 220, margin: 2,
+      color: { dark: '#000000', light: '#ffffff' }
+    }, err => {
+      if (err) document.getElementById('qr-link-text').textContent = '⚠️ QR error: ' + err.message;
+    });
+    document.getElementById('qr-link-text').textContent = pageURL;
+    document.getElementById('copy-btn').addEventListener('click', () => {
+      navigator.clipboard.writeText(pageURL).then(() => {
+        document.getElementById('copy-btn').textContent = 'Copied!';
+        setTimeout(() => document.getElementById('copy-btn').textContent = 'Copy link', 2000);
+      });
+    });
+    qrWrap.classList.add('show');
+    return;
+  }
+
+  // Mobile → fetch image, compile, launch AR
+
+  // 1. Fetch target image
+  msg('Loading…');
+  let imgBlob;
+  try {
+    const res = await fetch(imgURL);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    imgBlob = await res.blob();
+  } catch(e) {
+    showError('Image not found',
+      `Could not load <code>${IMAGE_FILE}</code>.<br/>
+       Make sure it's uploaded to your GitHub repo with this exact filename.`);
+    return;
+  }
+
+  // 2. Get aspect ratio so the video plane matches the image perfectly
+  let ratio = 9/16;
+  try {
+    const bmp = await createImageBitmap(imgBlob);
+    ratio = bmp.height / bmp.width;
+  } catch(_) {}
+
+  // 3. Compile MindAR target
+  msg('Analysing image…', 'This takes a few seconds — only once per visit.');
+  let mindURL;
+  try {
+    const bmp      = await createImageBitmap(imgBlob);
+    const compiler = new MINDAR.IMAGE.Compiler();
+    await compiler.compileImageTargets([bmp], () => {});
+    const buf = await compiler.exportData();
+    mindURL = URL.createObjectURL(new Blob([buf]));
+  } catch(e) {
+    showError('Compilation failed', 'Could not process the image target.<br/>' + e.message);
+    return;
+  }
+
+  // 4. Launch AR
+  launchAR(mindURL, vidURL, ratio);
+}
+
+async function launchAR(mindURL, vidURL, ratio) {
+  msg('Starting camera…');
+
+  const scene = document.createElement('a-scene');
+  scene.setAttribute('mindar-image',
+    `imageTargetSrc: ${mindURL}; autoStart: true; uiLoading: no; uiError: no; uiScanning: no;`);
+  scene.setAttribute('color-space', 'sRGB');
+  scene.setAttribute('renderer', 'colorManagement: true');
+  scene.setAttribute('vr-mode-ui', 'enabled: false');
+  scene.setAttribute('device-orientation-permission-ui', 'enabled: false');
+
+  // Create video element directly in DOM (not inside a-assets) for best mobile support
+  const vid = document.createElement('video');
+  vid.id = 'arvid';
+  vid.src = vidURL;
+  vid.setAttribute('preload', 'auto');
+  vid.setAttribute('loop', '');
+  vid.setAttribute('muted', '');
+  vid.setAttribute('playsinline', '');
+  vid.setAttribute('webkit-playsinline', '');
+  vid.setAttribute('crossorigin', 'anonymous');
+  vid.style.display = 'none';
+  document.body.appendChild(vid);
+
+  // Camera
+  const cam = document.createElement('a-camera');
+  cam.setAttribute('position', '0 0 0');
+  cam.setAttribute('look-controls', 'enabled: false');
+  scene.appendChild(cam);
+
+  // Image target + plane with video texture material
+  const target = document.createElement('a-entity');
+  target.setAttribute('mindar-image-target', 'targetIndex: 0');
+
+  const plane = document.createElement('a-plane');
+  plane.setAttribute('position', '0 0 0.001');
+  plane.setAttribute('width', '1');
+  plane.setAttribute('height', ratio.toFixed(5));
+  plane.setAttribute('material', 'shader: flat; src: #arvid; side: double');
+  plane.setAttribute('video-updater', '');
+  plane.setAttribute('rotation', '0 0 0');
+  target.appendChild(plane);
+  scene.appendChild(target);
+  document.body.appendChild(scene);
+
+  // Wait for video to be ready before A-Frame tries to use it as texture
+  await new Promise(resolve => {
+    if (vid.readyState >= 2) { resolve(); return; }
+    vid.addEventListener('canplay', resolve, { once: true });
+    vid.load();
+  });
+
+  // Events
+  scene.addEventListener('arReady', () => {
+    loadingEl.classList.add('fade');
+    setTimeout(() => loadingEl.style.display = 'none', 650);
+    statusEl.classList.add('show');
+  });
+
+  scene.addEventListener('arError', () => {
+    showError('Camera error',
+      'Could not access the camera.<br/>' +
+      'Make sure you allowed camera permission and the page is served over <b>HTTPS</b>.');
+  });
+
+  let unmuted = false;
+
+  target.addEventListener('targetFound', () => {
+    statusEl.textContent = '✅ Keep the image in view';
+    vid.play().then(() => {
+      if (!unmuted) unmuteEl.classList.add('show');
+    }).catch(() => {});
+  });
+
+  target.addEventListener('targetLost', () => {
+    statusEl.textContent = '🔍 Point camera at your image';
+    vid.pause();
+    vid.currentTime = 0;
+    unmuteEl.classList.remove('show');
+  });
+
+  unmuteEl.addEventListener('click', () => {
+    vid.muted = false;
+    unmuted = true;
+    unmuteEl.classList.remove('show');
+  });
+}
+
+function waitForLibsAndInit() {
+  if (typeof AFRAME === 'undefined' || typeof MINDAR === 'undefined') {
+    setTimeout(waitForLibsAndInit, 50);
+    return;
+  }
+  init();
+}
+waitForLibsAndInit();
+</script>
+</body>
+</html>
